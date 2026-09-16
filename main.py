@@ -4,7 +4,7 @@ Fast pipeline:
 - Camera frames are kept at display FPS while MediaPipe runs on a small frame.
 - MediaPipe VIDEO mode keeps temporal tracking between frames.
 - Gesture classification uses landmark angles + normalized distances, not just Y coordinates.
-- A short confidence-weighted temporal smoother rejects unstable frames.
+- A short confidence-weighted temporal smoother rejects unstable frames and resets between rounds.
 - Low-light enhancement is applied only when the scene is actually dark.
 """
 import json, os, random, time, urllib.request
@@ -214,7 +214,7 @@ def main():
         min_hand_detection_confidence=.55,min_hand_presence_confidence=.50,min_tracking_confidence=.50)
     landmarker=mp_vision.HandLandmarker.create_from_options(options); engine=GestureEngine(landmarker)
     state="MENU"; best_of=3; difficulty="Easy"; match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
-    countdown=0; result_time=0; capture=[]; player=ai=outcome=None; paused=False
+    countdown=0; capture_start=0.0; retry_time=0.0; result_time=0; capture=[]; player=ai=outcome=None; paused=False
     while True:
         ok,frame=cap.read()
         if not ok:break
@@ -246,11 +246,16 @@ def main():
             elapsed=time.time()-countdown; rem=3-int(elapsed); label=str(rem) if rem>0 else "SHOOT!"
             if label!=getattr(main,'last_label',None): play("shoot" if label=="SHOOT!" else "tick");main.last_label=label
             cv2.putText(frame,label,(w//2-75,h//2+25),0,1.8,(255,255,255),4)
-            if elapsed>=3: state="CAPTURE";capture=[];countdown=0
+            if elapsed>=3:
+                state="CAPTURE"
+                capture=[]
+                capture_start=time.perf_counter()
+                engine.reset_smoothing()
+                countdown=0
         elif state=="CAPTURE":
             if stable: capture.append((stable,stable_conf))
             cv2.putText(frame,"HOLD YOUR GESTURE",(25,45),0,.78,(0,230,255),2)
-            if time.time()-capture_start>=CAPTURE_WINDOW:
+            if time.perf_counter()-capture_start>=CAPTURE_WINDOW:
                 if capture:
                     weighted={m:0 for m in MOVES}
                     for g,c in capture: weighted[g]+=max(c,.1)
@@ -265,7 +270,11 @@ def main():
                 else: state="RETRY";retry_time=time.time()
         elif state=="RETRY":
             cv2.putText(frame,"Hand not clear — try again",(25,48),0,.8,(80,90,255),2)
-            if time.time()-retry_time>1.0:state="COUNTDOWN";countdown=time.time();main.last_label=None
+            if time.time()-retry_time>1.0:
+                state="COUNTDOWN"
+                countdown=time.time()
+                engine.reset_smoothing()
+                main.last_label=None
         elif state=="RESULT":
             icon(frame,player,(w//2-110,115),50,(255,220,0));icon(frame,ai,(w//2+110,115),50,(0,180,255))
             cv2.putText(frame,player,(w//2-155,185),0,.65,(255,220,0),2);cv2.putText(frame,ai,(w//2+85,185),0,.65,(0,180,255),2)
@@ -302,8 +311,15 @@ def main():
             if key==ord('e'):difficulty="Easy"
             if key==ord('d'):difficulty="Hard"
             if key==ord('t'):state="PRACTICE"
-            if key==32:match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None};state="WAITING"
-        elif state=="WAITING" and key==32:state="COUNTDOWN";countdown=time.time();main.last_label=None
+            if key==32:
+                match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
+                engine.reset_smoothing()
+                state="WAITING"
+        elif state=="WAITING" and key==32:
+            state="COUNTDOWN"
+            countdown=time.time()
+            engine.reset_smoothing()
+            main.last_label=None
         elif state=="MATCH_OVER" and key==32:match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None};state="WAITING"
     cap.release();landmarker.close();cv2.destroyAllWindows()
 
