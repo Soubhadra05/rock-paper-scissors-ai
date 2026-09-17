@@ -137,6 +137,19 @@ class GestureEngine:
         self.last_landmarks=None
         self.last_boost=False
 
+    def reset_smoothing(self):
+        """Clear temporal gesture state before a new round.
+
+        This is intentionally lightweight: MediaPipe's internal tracker keeps
+        running, while our game-level gesture history starts fresh.
+        """
+        self.raw = None
+        self.raw_conf = 0.0
+        self.history.clear()
+        self.last_landmarks = None
+        self.last_boost = False
+        self.last_detect = 0.0
+
     def process(self, frame):
         now=time.perf_counter()
         if now-self.last_detect < DETECT_INTERVAL and self.last_landmarks is not None:
@@ -212,12 +225,22 @@ def main():
         base_options=mp_python.BaseOptions(model_asset_path=MODEL_PATH),
         running_mode=mp_vision.RunningMode.VIDEO,num_hands=1,
         min_hand_detection_confidence=.55,min_hand_presence_confidence=.50,min_tracking_confidence=.50)
-    landmarker=mp_vision.HandLandmarker.create_from_options(options); engine=GestureEngine(landmarker)
+    try:
+        landmarker=mp_vision.HandLandmarker.create_from_options(options)
+    except Exception as exc:
+        cap.release()
+        print(f"Could not initialize MediaPipe hand tracking: {exc}")
+        print("Check that hand_landmarker.task exists and that mediapipe is installed correctly.")
+        return
+    engine=GestureEngine(landmarker)
     state="MENU"; best_of=3; difficulty="Easy"; match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
     countdown=0; capture_start=0.0; retry_time=0.0; result_time=0; capture=[]; player=ai=outcome=None; paused=False
     while True:
         ok,frame=cap.read()
-        if not ok:break
+        if not ok:
+            print("Warning: webcam frame could not be read. Retrying...")
+            time.sleep(0.05)
+            continue
         frame=cv2.flip(frame,1)
         gesture,conf,lm,boost=engine.process(frame)
         if lm: draw_hand(frame,lm)
@@ -305,7 +328,10 @@ def main():
         if key==ord('p'):paused=not paused;continue
         if key==ord('s'):SOUND_ENABLED=not SOUND_ENABLED
         if key==ord('m'):
-            state="MENU";match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
+            state="MENU"
+            match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
+            countdown=0; capture_start=0.0; retry_time=0.0; capture=[]; player=ai=outcome=None
+            engine.reset_smoothing()
         if state=="MENU":
             if key in (ord('1'),ord('3'),ord('5'),ord('7')):best_of=int(chr(key))
             if key==ord('e'):difficulty="Easy"

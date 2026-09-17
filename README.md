@@ -55,3 +55,8 @@ The MediaPipe model is downloaded automatically on first run if `hand_landmarker
 - Menu: `1/3/5/7` match length, `E/D` difficulty, `T` practice, `SPACE` start
 - During match: `SPACE` round, `M` menu
 - Any screen: `P` pause, `S` mute, `Q` quit
+
+## Crash fix in this build
+- Fixed a match-start crash caused by the game calling `engine.reset_smoothing()` without defining that method.
+- Gesture smoothing is now explicitly reset at menu/round transitions so previous-round detections cannot leak into the next round.
+- Added safer MediaPipe initialization and transient webcam-frame retry handling.
