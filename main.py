@@ -30,10 +30,10 @@ MOVES = ["Rock", "Paper", "Scissors"]
 BEATS = {"Rock":"Scissors", "Scissors":"Paper", "Paper":"Rock"}
 
 # Performance knobs. Lower DETECT_WIDTH = faster; 640 is a good quality/speed point.
-DETECT_WIDTH = 640
-DETECT_INTERVAL = 1.0 / 30.0
-CAPTURE_WINDOW = 0.32
-SMOOTHING_FRAMES = 6
+DETECT_WIDTH = 480
+DETECT_INTERVAL = 1.0 / 24.0
+CAPTURE_WINDOW = 0.30
+SMOOTHING_FRAMES = 5
 MIN_STABLE_CONFIDENCE = 0.58
 
 SAMPLE_RATE = 44100
@@ -138,17 +138,12 @@ class GestureEngine:
         self.last_boost=False
 
     def reset_smoothing(self):
-        """Clear temporal gesture state before a new round.
-
-        This is intentionally lightweight: MediaPipe's internal tracker keeps
-        running, while our game-level gesture history starts fresh.
-        """
-        self.raw = None
-        self.raw_conf = 0.0
+        """Clear temporal gesture state between rounds without rebuilding MediaPipe."""
+        self.raw=None
+        self.raw_conf=0.0
         self.history.clear()
-        self.last_landmarks = None
-        self.last_boost = False
-        self.last_detect = 0.0
+        self.last_landmarks=None
+        self.last_boost=False
 
     def process(self, frame):
         now=time.perf_counter()
@@ -160,12 +155,14 @@ class GestureEngine:
         if w>DETECT_WIDTH:
             nw=DETECT_WIDTH; nh=int(h*nw/w); small=cv2.resize(frame,(nw,nh),interpolation=cv2.INTER_AREA)
         boosted=False
+        # Only inspect brightness on the already-downscaled frame.
         gray=cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
-        if float(gray.mean())<78:
+        mean_brightness=float(gray.mean())
+        if mean_brightness<78:
             # Cheap gamma-only boost; CLAHE is reserved for very dark frames.
             lut=np.array([min(255,int(255*((i/255.0)**(1/1.45)))) for i in range(256)],dtype=np.uint8)
             small=cv2.LUT(small,lut); boosted=True
-            if gray.mean()<52:
+            if mean_brightness<52:
                 lab=cv2.cvtColor(small,cv2.COLOR_BGR2LAB); l,a,b=cv2.split(lab)
                 l=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(6,6)).apply(l)
                 small=cv2.cvtColor(cv2.merge((l,a,b)),cv2.COLOR_LAB2BGR)
@@ -218,29 +215,24 @@ def main():
     global SOUND_ENABLED
     ensure_model(); stats=load_stats()
     cap=cv2.VideoCapture(0,cv2.CAP_DSHOW)
+    # 720p keeps the UI sharp while leaving much more CPU headroom for inference.
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,1280); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,720)
     cap.set(cv2.CAP_PROP_FPS,60); cap.set(cv2.CAP_PROP_BUFFERSIZE,1)
+    try:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    except Exception:
+        pass
     if not cap.isOpened(): print("Could not open webcam."); return
     options=mp_vision.HandLandmarkerOptions(
         base_options=mp_python.BaseOptions(model_asset_path=MODEL_PATH),
         running_mode=mp_vision.RunningMode.VIDEO,num_hands=1,
         min_hand_detection_confidence=.55,min_hand_presence_confidence=.50,min_tracking_confidence=.50)
-    try:
-        landmarker=mp_vision.HandLandmarker.create_from_options(options)
-    except Exception as exc:
-        cap.release()
-        print(f"Could not initialize MediaPipe hand tracking: {exc}")
-        print("Check that hand_landmarker.task exists and that mediapipe is installed correctly.")
-        return
-    engine=GestureEngine(landmarker)
+    landmarker=mp_vision.HandLandmarker.create_from_options(options); engine=GestureEngine(landmarker)
     state="MENU"; best_of=3; difficulty="Easy"; match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
     countdown=0; capture_start=0.0; retry_time=0.0; result_time=0; capture=[]; player=ai=outcome=None; paused=False
     while True:
         ok,frame=cap.read()
-        if not ok:
-            print("Warning: webcam frame could not be read. Retrying...")
-            time.sleep(0.05)
-            continue
+        if not ok:break
         frame=cv2.flip(frame,1)
         gesture,conf,lm,boost=engine.process(frame)
         if lm: draw_hand(frame,lm)
@@ -328,10 +320,7 @@ def main():
         if key==ord('p'):paused=not paused;continue
         if key==ord('s'):SOUND_ENABLED=not SOUND_ENABLED
         if key==ord('m'):
-            state="MENU"
-            match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
-            countdown=0; capture_start=0.0; retry_time=0.0; capture=[]; player=ai=outcome=None
-            engine.reset_smoothing()
+            state="MENU";match={"score":{"You":0,"AI":0},"history":[],"streak":0,"owner":None}
         if state=="MENU":
             if key in (ord('1'),ord('3'),ord('5'),ord('7')):best_of=int(chr(key))
             if key==ord('e'):difficulty="Easy"
